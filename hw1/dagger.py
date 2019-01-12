@@ -58,4 +58,37 @@ if __name__=='__main__':
     normobs_placeholder = tf.placeholder(tf.float32, shape=(None, expert_data["observations"].shape[-1]))
     learned_action = dag_model(normobs_placeholder)
 
-    
+    env = gym.make(args.envname)
+    max_steps = args.max_timesteps or env.spec.timestep_limit
+    episodic_rewards=[]
+    for rollout in range(args.num_rollouts):
+        for episode in range(2):
+            obs = env.reset()
+            normed_obs = normalize(obs, agg_observations)
+            done=False
+            total_reward = 0
+            step = 0
+            with tf.Session() as sess:
+                saver.restore(sess, model_path)
+                while not done:
+                    action = sess.run(learned_action, feed_dict={normobs_placeholder: normed_obs[None, :]})
+                    expert_action = expert_policy_fn(obs[None, :])
+                    agg_observations.append(obs)
+                    agg_actions.append(expert_action)
+                    obs, reward, done, _ = env.step(action)
+                    normed_obs = normalize(obs, agg_observations)
+                    total_reward +=reward
+                    step+=1
+                    if args.render():
+                        env.render()
+                    if not step%10:
+                        print("Episode: {}, Step: {} of {}, total reward: {}".format(episode, step, max_steps, total_reward))
+                    if step >= max_steps:
+                        break
+            episodic_rewards.append(total_reward)
+            agg_dataset= tf.util.create_dataset(
+                input_features = normalized_expert_obss,
+                output_labels = expert_acts,
+                batch_size = batch_size,
+                num_epochs = num_epochs
+            )
